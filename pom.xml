@@ -18,6 +18,7 @@
 
     <modules>
         <module>elstar-sender-batch</module>
+        <module>elstar-receive-batch</module>
     </modules>
 
     <properties>
