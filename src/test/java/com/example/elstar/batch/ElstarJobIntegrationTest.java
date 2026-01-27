@@ -2,12 +2,10 @@ package com.example.elstar.batch;
 
 import com.example.elstar.TestBatchApplication;
 import com.example.elstar.entity.ElstarData;
+import com.example.elstar.jms.ElstarDataMessageConverter;
 import com.example.elstar.repository.ElstarDataRepository;
-import jakarta.jms.Connection;
 import jakarta.jms.ConnectionFactory;
-import jakarta.jms.JMSContext;
-import jakarta.jms.JMSException;
-import org.junit.jupiter.api.BeforeEach;
+import org.apache.activemq.artemis.jms.client.ActiveMQConnectionFactory;
 import org.junit.jupiter.api.Test;
 import org.springframework.batch.core.BatchStatus;
 import org.springframework.batch.core.job.JobExecution;
@@ -15,6 +13,7 @@ import org.springframework.batch.core.job.parameters.JobParameters;
 import org.springframework.batch.test.JobOperatorTestUtils;
 import org.springframework.batch.test.context.SpringBatchTest;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
@@ -22,19 +21,48 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
 import org.springframework.jms.core.JmsTemplate;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.jdbc.Sql;
+import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.utility.DockerImageName;
 
 import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.api.BeforeEach;
 
-@SpringBootTest(classes = {TestBatchApplication.class, ElstarJobIntegrationTest.TestJmsConfiguration.class})
+@SpringBootTest(classes = {TestBatchApplication.class, ElstarJobIntegrationTest.ArtemisTestConfiguration.class})
 @SpringBatchTest
 @ActiveProfiles("test")
-@EnableAutoConfiguration(exclude = {com.ibm.mq.spring.boot.MQAutoConfiguration.class})
+@EnableAutoConfiguration(exclude = {
+        com.ibm.mq.spring.boot.MQAutoConfiguration.class,
+        org.springframework.boot.artemis.autoconfigure.ArtemisAutoConfiguration.class
+})
 @Sql(scripts = "/test-data.sql", executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
+@Testcontainers
 class ElstarJobIntegrationTest {
+
+    private static final int ARTEMIS_PORT = 61616;
+    private static final String ARTEMIS_USER = "artemis";
+    private static final String ARTEMIS_PASSWORD = "artemis";
+
+    @Container
+    static GenericContainer<?> artemisContainer = new GenericContainer<>(
+            DockerImageName.parse("apache/activemq-artemis:latest-alpine"))
+            .withExposedPorts(ARTEMIS_PORT)
+            .withEnv("ARTEMIS_USER", ARTEMIS_USER)
+            .withEnv("ARTEMIS_PASSWORD", ARTEMIS_PASSWORD)
+            .withEnv("ANONYMOUS_LOGIN", "true");
+
+    @DynamicPropertySource
+    static void configureProperties(DynamicPropertyRegistry registry) {
+        registry.add("artemis.broker-url", () ->
+                "tcp://" + artemisContainer.getHost() + ":" + artemisContainer.getMappedPort(ARTEMIS_PORT));
+    }
 
     @Autowired
     private JobOperatorTestUtils jobOperatorTestUtils;
@@ -43,11 +71,18 @@ class ElstarJobIntegrationTest {
     private ElstarDataRepository repository;
 
     @Autowired
-    private TestJmsTemplate testJmsTemplate;
+    private JmsTemplate jmsTemplate;
+
+    @Value("${elstar.jms.queue-name}")
+    private String queueName;
 
     @BeforeEach
-    void setUp() {
-        testJmsTemplate.clearMessages();
+    void clearQueue() {
+        // Clear any messages from previous tests
+        jmsTemplate.setReceiveTimeout(100);
+        while (jmsTemplate.receive(queueName) != null) {
+            // drain the queue
+        }
     }
 
     @Test
@@ -67,7 +102,10 @@ class ElstarJobIntegrationTest {
         JobExecution jobExecution = jobOperatorTestUtils.startJob(jobParameters);
 
         assertEquals(BatchStatus.COMPLETED, jobExecution.getStatus());
-        assertEquals(5, testJmsTemplate.getSentMessages().size());
+
+        // Read all messages from the queue
+        List<ElstarData> receivedMessages = receiveAllMessages();
+        assertEquals(5, receivedMessages.size());
     }
 
     @Test
@@ -78,84 +116,48 @@ class ElstarJobIntegrationTest {
 
         assertEquals(BatchStatus.COMPLETED, jobExecution.getStatus());
 
-        List<Object> sentMessages = testJmsTemplate.getSentMessages();
-        assertEquals(5, sentMessages.size());
+        // Read all messages from the queue and verify content
+        List<ElstarData> receivedMessages = receiveAllMessages();
+        assertEquals(5, receivedMessages.size());
 
-        for (Object message : sentMessages) {
-            assertTrue(message instanceof ElstarData);
-            ElstarData elstarData = (ElstarData) message;
+        for (ElstarData elstarData : receivedMessages) {
             assertNotNull(elstarData.getId());
             assertNotNull(elstarData.getXmlNachricht());
             assertTrue(elstarData.getXmlNachricht().contains("<ElstarDaten>"));
         }
     }
 
+    private List<ElstarData> receiveAllMessages() {
+        List<ElstarData> messages = new ArrayList<>();
+        jmsTemplate.setReceiveTimeout(1000);
+
+        ElstarData message;
+        while ((message = (ElstarData) jmsTemplate.receiveAndConvert(queueName)) != null) {
+            messages.add(message);
+        }
+
+        return messages;
+    }
+
     @TestConfiguration
-    static class TestJmsConfiguration {
+    static class ArtemisTestConfiguration {
 
         @Bean
         @Primary
         public ConnectionFactory connectionFactory() {
-            return new StubConnectionFactory();
+            String brokerUrl = "tcp://" + artemisContainer.getHost() + ":" + artemisContainer.getMappedPort(ARTEMIS_PORT);
+            ActiveMQConnectionFactory factory = new ActiveMQConnectionFactory(brokerUrl);
+            factory.setUser(ARTEMIS_USER);
+            factory.setPassword(ARTEMIS_PASSWORD);
+            return factory;
         }
 
         @Bean
         @Primary
-        public TestJmsTemplate jmsTemplate(ConnectionFactory connectionFactory) {
-            return new TestJmsTemplate(connectionFactory);
-        }
-    }
-
-    static class TestJmsTemplate extends JmsTemplate {
-        private final List<Object> sentMessages = new ArrayList<>();
-
-        public TestJmsTemplate(ConnectionFactory connectionFactory) {
-            super(connectionFactory);
-        }
-
-        @Override
-        public void convertAndSend(String destinationName, Object message) {
-            sentMessages.add(message);
-        }
-
-        public List<Object> getSentMessages() {
-            return sentMessages;
-        }
-
-        public void clearMessages() {
-            sentMessages.clear();
-        }
-    }
-
-    static class StubConnectionFactory implements ConnectionFactory {
-        @Override
-        public Connection createConnection() throws JMSException {
-            throw new UnsupportedOperationException("Stub connection factory");
-        }
-
-        @Override
-        public Connection createConnection(String userName, String password) throws JMSException {
-            throw new UnsupportedOperationException("Stub connection factory");
-        }
-
-        @Override
-        public JMSContext createContext() {
-            throw new UnsupportedOperationException("Stub connection factory");
-        }
-
-        @Override
-        public JMSContext createContext(String userName, String password) {
-            throw new UnsupportedOperationException("Stub connection factory");
-        }
-
-        @Override
-        public JMSContext createContext(String userName, String password, int sessionMode) {
-            throw new UnsupportedOperationException("Stub connection factory");
-        }
-
-        @Override
-        public JMSContext createContext(int sessionMode) {
-            throw new UnsupportedOperationException("Stub connection factory");
+        public JmsTemplate jmsTemplate(ConnectionFactory connectionFactory, ElstarDataMessageConverter messageConverter) {
+            JmsTemplate jmsTemplate = new JmsTemplate(connectionFactory);
+            jmsTemplate.setMessageConverter(messageConverter);
+            return jmsTemplate;
         }
     }
 }
