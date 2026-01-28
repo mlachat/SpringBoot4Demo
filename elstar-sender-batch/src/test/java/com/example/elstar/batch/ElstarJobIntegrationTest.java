@@ -4,8 +4,10 @@ import com.example.elstar.TestBatchApplication;
 import com.example.elstar.entity.ElstarData;
 import com.example.elstar.jms.ElstarDataMessageConverter;
 import com.example.elstar.repository.ElstarDataRepository;
+import com.ibm.mq.jakarta.jms.MQConnectionFactory;
+import com.ibm.msg.client.jakarta.wmq.WMQConstants;
 import jakarta.jms.ConnectionFactory;
-import org.apache.activemq.artemis.jms.client.ActiveMQConnectionFactory;
+import jakarta.jms.JMSException;
 import org.junit.jupiter.api.Test;
 import org.springframework.batch.core.BatchStatus;
 import org.springframework.batch.core.job.JobExecution;
@@ -25,6 +27,7 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.jdbc.Sql;
 import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
@@ -35,33 +38,38 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 import org.junit.jupiter.api.BeforeEach;
 
-@SpringBootTest(classes = {TestBatchApplication.class, ElstarJobIntegrationTest.ArtemisTestConfiguration.class})
+@SpringBootTest(classes = {TestBatchApplication.class, ElstarJobIntegrationTest.IbmMqTestConfiguration.class})
 @SpringBatchTest
 @ActiveProfiles("test")
 @EnableAutoConfiguration(exclude = {
-        com.ibm.mq.spring.boot.MQAutoConfiguration.class,
-        org.springframework.boot.artemis.autoconfigure.ArtemisAutoConfiguration.class
+        com.ibm.mq.spring.boot.MQAutoConfiguration.class
 })
 @Sql(scripts = "/test-data.sql", executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
 @Testcontainers
 class ElstarJobIntegrationTest {
 
-    private static final int ARTEMIS_PORT = 61616;
-    private static final String ARTEMIS_USER = "artemis";
-    private static final String ARTEMIS_PASSWORD = "artemis";
+    private static final int MQ_PORT = 1414;
+    private static final String MQ_QMGR_NAME = "QM1";
+    private static final String MQ_CHANNEL = "DEV.APP.SVRCONN";
+    private static final String MQ_USER = "app";
+    private static final String MQ_PASSWORD = "passw0rd";
 
     @Container
-    static GenericContainer<?> artemisContainer = new GenericContainer<>(
-            DockerImageName.parse("apache/activemq-artemis:latest-alpine"))
-            .withExposedPorts(ARTEMIS_PORT)
-            .withEnv("ARTEMIS_USER", ARTEMIS_USER)
-            .withEnv("ARTEMIS_PASSWORD", ARTEMIS_PASSWORD)
-            .withEnv("ANONYMOUS_LOGIN", "true");
+    static GenericContainer<?> mqContainer = new GenericContainer<>(
+            DockerImageName.parse("icr.io/ibm-messaging/mq:latest"))
+            .withExposedPorts(MQ_PORT)
+            .withEnv("LICENSE", "accept")
+            .withEnv("MQ_QMGR_NAME", MQ_QMGR_NAME)
+            .withEnv("MQ_APP_PASSWORD", MQ_PASSWORD)
+            .waitingFor(Wait.forLogMessage(".*Started web server.*", 1));
 
     @DynamicPropertySource
     static void configureProperties(DynamicPropertyRegistry registry) {
-        registry.add("artemis.broker-url", () ->
-                "tcp://" + artemisContainer.getHost() + ":" + artemisContainer.getMappedPort(ARTEMIS_PORT));
+        registry.add("ibm.mq.queueManager", () -> MQ_QMGR_NAME);
+        registry.add("ibm.mq.channel", () -> MQ_CHANNEL);
+        registry.add("ibm.mq.connName", () -> mqContainer.getHost() + "(" + mqContainer.getMappedPort(MQ_PORT) + ")");
+        registry.add("ibm.mq.user", () -> MQ_USER);
+        registry.add("ibm.mq.password", () -> MQ_PASSWORD);
     }
 
     @Autowired
@@ -140,15 +148,19 @@ class ElstarJobIntegrationTest {
     }
 
     @TestConfiguration
-    static class ArtemisTestConfiguration {
+    static class IbmMqTestConfiguration {
 
         @Bean
         @Primary
-        public ConnectionFactory connectionFactory() {
-            String brokerUrl = "tcp://" + artemisContainer.getHost() + ":" + artemisContainer.getMappedPort(ARTEMIS_PORT);
-            ActiveMQConnectionFactory factory = new ActiveMQConnectionFactory(brokerUrl);
-            factory.setUser(ARTEMIS_USER);
-            factory.setPassword(ARTEMIS_PASSWORD);
+        public ConnectionFactory connectionFactory() throws JMSException {
+            MQConnectionFactory factory = new MQConnectionFactory();
+            factory.setHostName(mqContainer.getHost());
+            factory.setPort(mqContainer.getMappedPort(MQ_PORT));
+            factory.setQueueManager(MQ_QMGR_NAME);
+            factory.setChannel(MQ_CHANNEL);
+            factory.setTransportType(WMQConstants.WMQ_CM_CLIENT);
+            factory.setStringProperty(WMQConstants.USERID, MQ_USER);
+            factory.setStringProperty(WMQConstants.PASSWORD, MQ_PASSWORD);
             return factory;
         }
 

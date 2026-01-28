@@ -3,6 +3,7 @@ package com.example.elstar.batch;
 import com.example.elstar.TestBatchApplication;
 import com.example.elstar.entity.ElstarData;
 import com.example.elstar.repository.ElstarDataRepository;
+import jakarta.jms.ConnectionFactory;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.batch.infrastructure.item.ExecutionContext;
@@ -10,16 +11,29 @@ import org.springframework.batch.infrastructure.item.database.JpaCursorItemReade
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Primary;
 import org.springframework.test.context.ActiveProfiles;
 
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.mock;
 
-@SpringBootTest(classes = TestBatchApplication.class)
+@SpringBootTest(classes = {TestBatchApplication.class, JpaCursorItemReaderTest.MockJmsConfiguration.class})
 @ActiveProfiles("test")
 @EnableAutoConfiguration(exclude = {com.ibm.mq.spring.boot.MQAutoConfiguration.class})
 class JpaCursorItemReaderTest {
+
+    @TestConfiguration
+    static class MockJmsConfiguration {
+        @Bean
+        @Primary
+        public ConnectionFactory connectionFactory() {
+            return mock(ConnectionFactory.class);
+        }
+    }
 
     @Autowired
     private ElstarDataRepository repository;

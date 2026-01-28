@@ -2,11 +2,15 @@ package com.example.elstar.repository;
 
 import com.example.elstar.ReceiveBatchApplication;
 import com.example.elstar.entity.ElstarData;
+import jakarta.jms.ConnectionFactory;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Primary;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.annotation.Transactional;
@@ -16,13 +20,23 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.mock;
 
-@SpringBootTest(classes = ReceiveBatchApplication.class)
+@SpringBootTest(classes = {ReceiveBatchApplication.class, ElstarDataRepositoryTest.MockJmsConfiguration.class})
 @ActiveProfiles("test")
 @EnableAutoConfiguration(exclude = {com.ibm.mq.spring.boot.MQAutoConfiguration.class})
 @Sql(scripts = "/test-data.sql", executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
 @Transactional
 class ElstarDataRepositoryTest {
+
+    @TestConfiguration
+    static class MockJmsConfiguration {
+        @Bean
+        @Primary
+        public ConnectionFactory connectionFactory() {
+            return mock(ConnectionFactory.class);
+        }
+    }
 
     @Autowired
     private ElstarDataRepository repository;

@@ -62,20 +62,6 @@
             <scope>test</scope>
         </dependency>
 
-        <!-- ActiveMQ Artemis for testing -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-artemis</artifactId>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>org.apache.activemq</groupId>
-            <artifactId>artemis-jakarta-server</artifactId>
-            <version>2.44.0</version>
-            <scope>test</scope>
-        </dependency>
-
         <!-- Testcontainers -->
         <dependency>
             <groupId>org.testcontainers</groupId>
