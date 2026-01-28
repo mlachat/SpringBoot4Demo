@@ -33,6 +33,7 @@ jobs:
     # Optional: Uploads the full dependency graph to GitHub to improve the quality of Dependabot alerts this repository can receive
     - name: Update dependency graph
       uses: advanced-security/maven-dependency-submission-action@v1
+      continue-on-error: true
       with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-        path: '.'
+        token: ${{ secrets.GITHUB_TOKEN }}
+        directory: '.'
